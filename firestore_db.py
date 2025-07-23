@@ -1,12 +1,17 @@
 import os
+import json
 import firebase_admin
 from firebase_admin import credentials, firestore
 
 class FirestoreDB:
     def __init__(self):
         if not firebase_admin._apps:
-            cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-            cred = credentials.Certificate(cred_path)
+            cred_json = os.getenv("GOOGLE_CREDENTIALS_JSON")
+            if not cred_json:
+                raise ValueError("GOOGLE_CREDENTIALS_JSON 環境変数が設定されていません。")
+
+            cred_dict = json.loads(cred_json)
+            cred = credentials.Certificate(cred_dict)
             firebase_admin.initialize_app(cred)
 
         self.db = firestore.client()
