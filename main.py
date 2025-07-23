@@ -9,6 +9,10 @@ app = FastAPI()
 class LineWebhookBody(BaseModel):
     events: list
 
+@app.get("/")
+def read_root():
+    return {"message": "LINE chatbot is up and running."}
+
 @app.post("/webhook")
 async def line_webhook(body: LineWebhookBody):
     try:
