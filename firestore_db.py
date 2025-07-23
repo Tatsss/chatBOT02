@@ -2,20 +2,32 @@ import os
 import firebase_admin
 from firebase_admin import credentials, firestore
 
-# 初期化（1回のみ）
-if not firebase_admin._apps:
-    cred = credentials.Certificate("chatbot-cb433-firebase-adminsdk-fbsvc-13eabf3186.json")
-    firebase_admin.initialize_app(cred)
+class FirestoreDB:
+    def __init__(self):
+        if not firebase_admin._apps:
+            cred_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+            cred = credentials.Certificate(cred_path)
+            firebase_admin.initialize_app(cred)
 
-db = firestore.client()
+        self.db = firestore.client()
+        self.collection = self.db.collection("conversations")
 
-def get_previous_response_id(user_id: str):
-    doc = db.collection("users").document(user_id).get()
-    if doc.exists:
-        return doc.to_dict().get("last_response_id")
-    return None
+    def get_last_response_id(self, user_id):
+        docs = (
+            self.collection.where("user_id", "==", user_id)
+            .order_by("timestamp", direction=firestore.Query.DESCENDING)
+            .limit(1)
+            .stream()
+        )
+        for doc in docs:
+            return doc.to_dict().get("response_id")
+        return None
 
-def update_response_id(user_id: str, response_id: str):
-    db.collection("users").document(user_id).set({
-        "last_response_id": response_id
-    }, merge=True)
+    def log_conversation(self, user_id, user_message, ai_response, response_id):
+        self.collection.add({
+            "user_id": user_id,
+            "user_message": user_message,
+            "ai_response": ai_response,
+            "response_id": response_id,
+            "timestamp": firestore.SERVER_TIMESTAMP,
+        })
