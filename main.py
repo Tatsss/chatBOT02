@@ -1,4 +1,3 @@
-# main.py
 from fastapi import FastAPI, Request
 from pydantic import BaseModel
 from openai_client import OpenAIClient
