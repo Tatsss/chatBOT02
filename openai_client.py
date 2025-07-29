@@ -1,4 +1,5 @@
 import os
+import logging
 from openai import OpenAI
 
 class OpenAIClient:
@@ -35,5 +36,6 @@ class OpenAIClient:
             return ai_message, response_id
 
         except Exception as e:
-            print("Error:", e)
+            logger = logging.getLogger(__name__)
+            logger.exception("🔥 OpenAIClient#get_reply failed")
             return "エラーが発生しました。", None

@@ -5,12 +5,20 @@ from firestore_db import FirestoreDB
 import os
 import uvicorn
 import requests
+import logging
 
 app = FastAPI()
 openai_client = OpenAIClient()
 db = FirestoreDB()
 
 LINE_ACCESS_TOKEN = os.getenv("LINE_ACCESS_TOKEN")
+
+# Logging Configuration
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
+)
+logger = logging.getLogger(__name__)
 
 class LineWebhookEvent(BaseModel):
     replyToken: str
@@ -27,6 +35,7 @@ def read_root():
 
 @app.post("/webhook")
 async def webhook(body: LineWebhookBody):
+    logger.info("📩 /webhook called")
     if not body.events:
         return {"status": "no events"}
 
@@ -36,11 +45,16 @@ async def webhook(body: LineWebhookBody):
 
     user_id = event.source["userId"]
     user_message = event.message["text"]
+    logger.info(f"👤 From {user_id}: {user_message}")
 
     last_response_id = db.get_last_response_id(user_id)
+    logger.info(f"💾 last_response_id = {last_response_id!r}")
+
     ai_response, response_id = openai_client.get_reply(user_message, last_response_id)
+    logger.info(f"🤖 OpenAI replied: response_id={response_id!r}")
 
     db.log_conversation(user_id, user_message, ai_response, response_id)
+    logger.info("💾 log_conversation completed")
 
     headers = {
         "Content-Type": "application/json",

@@ -29,10 +29,16 @@ class FirestoreDB:
         return None
 
     def log_conversation(self, user_id, user_message, ai_response, response_id):
-        self.collection.add({
-            "user_id": user_id,
-            "user_message": user_message,
-            "ai_response": ai_response,
-            "response_id": response_id,
-            "timestamp": firestore.SERVER_TIMESTAMP,
-        })
+        try:
+            self.collection.add({
+                "user_id": user_id,
+                "user_message": user_message,
+                "ai_response": ai_response,
+                "response_id": response_id,
+                "timestamp": firestore.SERVER_TIMESTAMP,
+            })
+
+        except Exception:
+            logger = logging.getLogger(__name__)
+            logger.exception("🔥 FirestoreDB.log_conversation failed")
+            raise
