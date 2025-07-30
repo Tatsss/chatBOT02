@@ -29,6 +29,11 @@ class LineWebhookEvent(BaseModel):
 class LineWebhookBody(BaseModel):
     events: list[LineWebhookEvent]
 
+@app.get("/health")
+def health():
+    logger.info("👍 /health called")
+    return {"status": "ok"}
+
 @app.get("/")
 def read_root():
     return {"message": "LINE chatbot is up and running."}
@@ -48,7 +53,7 @@ async def webhook(body: LineWebhookBody):
     logger.info(f"👤 From {user_id}: {user_message}")
 
     last_response_id = db.get_last_response_id(user_id)
-    logger.info(f"💾 last_response_id = {last_response_id!r}")
+    logger.info(f"⭐️ last_response_id = {last_response_id!r}")
 
     ai_response, response_id = openai_client.get_reply(user_message, last_response_id)
     logger.info(f"🤖 OpenAI replied: response_id={response_id!r}")
