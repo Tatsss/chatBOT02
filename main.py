@@ -29,11 +29,6 @@ class LineWebhookEvent(BaseModel):
 class LineWebhookBody(BaseModel):
     events: list[LineWebhookEvent]
 
-@app.get("/health")
-def health():
-    logger.info("👍 /health called")
-    return {"status": "ok"}
-
 @app.get("/")
 def read_root():
     return {"message": "LINE chatbot is up and running."}
