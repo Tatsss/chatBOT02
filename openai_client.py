@@ -145,7 +145,13 @@ def build_messages(
         recent_turns: [(role, content)] 古→新の順 でも 新→古でもOK。後で並び替える。
         """
         msgs: List[Dict] = []
-        # 1) 最小セット
+        # 1) 最小セット まず CORE / ROLE / SYSTEM をこの順で差し込む（存在するもののみ）
+        if CORE_PROMPT:
+            msgs.append({"role": "system", "content": CORE_PROMPT[:4000]})
+        if ROLE_PROMPT:
+            msgs.append({"role": "system", "content": ROLE_PROMPT[:4000]})
+        if system_prompt:
+            msgs.append({"role": "system", "content": system_prompt.strip()[:4000]})
         msgs.append({"role": "system", "content": system_prompt.strip()[:4000]})
 
         if profile_bullets:
@@ -173,6 +179,20 @@ def build_messages(
 
         return msgs
 
+def _extract_usage_from_chat_completion(resp):
+    try:
+        u = getattr(resp, "usage", None) or {}
+        inp = getattr(u, "input_tokens", None) or u.get("input_tokens")
+        out = getattr(u, "output_tokens", None) or u.get("output_tokens")
+        tot = getattr(u, "total_tokens", None) or u.get("total_tokens")
+    if tot is None and (inp is not None or out is not None):
+        tot = (inp or 0) + (out or 0)
+        return (int(inp) if inp is not None else None,
+                int(out) if out is not None else None,
+                int(tot) if tot is not None else None)
+    except Exception:
+        return (None, None, None)
+
 def generate_chat(messages: List[Dict], max_tokens: int = 1024, temperature: float = 0.2) -> str:
         """
         実際の生成呼び出し。context超過時はフェイルセーフで縮約再送。
@@ -184,6 +204,12 @@ def generate_chat(messages: List[Dict], max_tokens: int = 1024, temperature: flo
                 temperature=temperature,
                 max_tokens=max_tokens,
             )
+
+            inp_toks, out_toks, tot_toks = _extract_usage_from_chat_completion(resp)
+            if tot_toks is not None:
+                _token_meter.add(tot_toks)
+            logger.info("🧮 usage: input=%s output=%s total=%s | last60s=%s",
+                    inp_toks, out_toks, tot_toks, _token_meter.last_60s())
             return resp.choices[0].message.content
         except BadRequestError as e:
             # context_length_exceeded 対応：最小構成に縮約して再送
@@ -195,6 +221,11 @@ def generate_chat(messages: List[Dict], max_tokens: int = 1024, temperature: flo
                     temperature=temperature,
                     max_tokens=max_tokens,
                 )
+                inp_toks, out_toks, tot_toks = _extract_usage_from_chat_completion(resp)
+                if tot_toks is not None:
+                    _token_meter.add(tot_toks)
+                logger.info("🧮 usage: input=%s output=%s total=%s | last60s=%s",
+                        inp_toks, out_toks, tot_toks, _token_meter.last_60s())
                 return resp.choices[0].message.content
             raise
 
