@@ -1,8 +1,11 @@
 import os
 import time
+import math
 import logging
+import tiktoken
 from collections import deque
-from openai import OpenAI
+from typing import List, Dict, Tuple
+from openai import OpenAI, BadRequestError
 try:
     from openai import RateLimitError, APIStatusError
 except Exception:
@@ -11,11 +14,189 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+MODEL_CONTEXT = 128_000
+BUDGET_RATIO = 0.80             # 上限の 80%
+OUTPUT_RESERVE = 1024           # 応答用に最低これだけは確保
+TARGET_BUDGET = max(16_000, int(MODEL_CONTEXT * BUDGET_RATIO) - OUTPUT_RESERVE)
+
+client = OpenAI()
+
 CORE_PROMPT = os.getenv("OPENAI_CORE_PROMPT", "").strip()
 ROLE_PROMPT = os.getenv("OPENAI_ROLE_PROMPT", "").strip()
 FALLBACK_GENERIC   = os.getenv("FALLBACK_GENERIC", "処理中に問題が発生しました。恐れ入りますが、もう一度入力していただけますか？").strip()
 FALLBACK_RATE      = os.getenv("FALLBACK_RATE", "ただいま少し混み合っているため、すぐに応答できませんでした。時間をおいてから、もう一度お試しください。").strip()
 FALLBACK_SENSITIVE = os.getenv("FALLBACK_SENSITIVE", "").strip()
+
+
+def estimate_tokens(messages: List[Dict]) -> int:
+        """
+        ざっくり推定。モデルに対応するエンコーダが無ければ cl100k で代替。
+        """
+        try:
+            enc = tiktoken.encoding_for_model(MODEL)
+        except Exception:
+            enc = tiktoken.get_encoding("cl100k_base")
+
+        total = 0
+        for m in messages:
+            # role + content の概算
+            content = m.get("content") or ""
+            if isinstance(content, list):
+                text = " ".join([p.get("text","") for p in content if isinstance(p, dict)])
+            else:
+                text = str(content)
+            total += len(enc.encode(m.get("role","") + ": " + text))
+        return total
+
+def _system_block(title: str, body: str) -> Dict:
+        return {"role": "system", "content": f"### {title}\n{body}".strip()}
+
+def summarize_text_block(text: str, lang: str = "ja") -> str:
+        """
+        古い区間を要約（事実/決定/タスク/固有名詞に絞って短文化）
+        """
+        system = "You are a careful summarizer."
+        prompt = (
+            "以下の会話ログを、事実・決定事項・未決タスク・固有名詞に絞って"
+            "日本語で150〜250トークン程度に要約してください。挨拶や冗長表現は削除。引用は不要。"
+        )
+        # Chat Completions でも Responses でもOKにする簡易実装
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=[
+                    {"role":"system","content":system},
+                    {"role":"user","content": prompt + "\n\n" + text}
+                ],
+                temperature=0.2,
+                max_tokens=400,
+            )
+            return resp.choices[0].message.content.strip()
+        except Exception:
+            # フェイルセーフでそのまま切り詰め
+            return text[:1500]
+
+def shrink_context(msgs: List[Dict], target_tokens: int) -> List[Dict]:
+        """
+        いちばん古い user/assistant ペアからまとめて要約に置換していく。
+        """
+        # system 以外の最初の連続ブロックをまとめる
+        sys_count = sum(1 for m in msgs if m["role"] == "system")
+        # 古い順で非systemを収集
+        non_sys = [i for i, m in enumerate(msgs) if m["role"] != "system"]
+        if not non_sys:
+            return msgs
+
+        start = non_sys[0]  # 一番古い
+        # ある程度の塊（例: 4〜6メッセージ）で要約
+        end = min(start + 6, len(msgs))
+        chunk = msgs[start:end]
+        text = "\n\n".join([f"{m['role']}: {m['content']}" for m in chunk])
+        summary = summarize_text_block(text)
+
+        # 置換（systemの直後あたりに「Summarized history」ブロックを差し込む）
+        new_msgs = msgs[:start] + [_system_block("Summarized history (older turns)", summary)] + msgs[end:]
+
+        # まだ大きければ繰り返す
+        while estimate_tokens(new_msgs) > target_tokens:
+            # 次の古い塊
+            non_sys2 = [i for i, m in enumerate(new_msgs) if m["role"] != "system"]
+            if len(non_sys2) <= 6:
+                break
+            start2 = non_sys2[0]
+            end2 = min(start2 + 6, len(new_msgs))
+            chunk2 = new_msgs[start2:end2]
+            text2 = "\n\n".join([f"{m['role']}: {m['content']}" for m in chunk2])
+            summary2 = summarize_text_block(text2)
+            new_msgs = new_msgs[:start2] + [_system_block("Summarized history (older turns)", summary2)] + new_msgs[end2:]
+
+            if all(m["role"] == "system" for m in new_msgs):
+                break
+
+        return new_msgs
+
+def force_shrink(msgs: List[Dict]) -> List[Dict]:
+        """
+        最終手段：既存のサマリを再要約 or 非systemをほぼ落とす
+        """
+        # 既存 summary を短縮
+        for i, m in enumerate(msgs):
+            if m["role"] == "system" and "summary" in m.get("content","").lower():
+                m["content"] = m["content"][:2000]  # 大雑把に切詰め
+        # まだダメなら直近以外の user/assistant を削る
+        if estimate_tokens(msgs) > TARGET_BUDGET:
+            keep = []
+            # system 全部 + 直近2 user/assistant
+            non_sys = [m for m in msgs if m["role"] != "system"]
+            keep_non_sys = non_sys[-4:]
+            keep = [m for m in msgs if m["role"] == "system"] + keep_non_sys
+            return keep
+        return msgs
+
+def build_messages(
+        system_prompt: str,
+        profile_bullets: List[str],
+        running_summary: str,
+        recent_turns: List[Tuple[str, str]],
+        hard_cap_tokens: int = TARGET_BUDGET,
+        ) -> List[Dict]:
+        """
+        recent_turns: [(role, content)] 古→新の順 でも 新→古でもOK。後で並び替える。
+        """
+        msgs: List[Dict] = []
+        # 1) 最小セット
+        msgs.append({"role": "system", "content": system_prompt.strip()[:4000]})
+
+        if profile_bullets:
+            profile_text = "- " + "\n- ".join(profile_bullets[:10])
+            msgs.append(_system_block("User profile (concise)", profile_text))
+
+        if running_summary:
+            msgs.append(_system_block("Conversation background (summary)", running_summary))
+
+        # 2) 直近Kターン（多めに入れて、予算で削る）
+        #    新しい順で最後に来るように整列
+        turns = recent_turns[:]  # shallow copy
+        # （古→新）の想定にして、新しいものが後に並ぶようにしておく
+        for role, content in turns:
+            msgs.append({"role": role, "content": content})
+
+        # 3) 超過チェック → 縮約
+        tokens = estimate_tokens(msgs)
+        if tokens > hard_cap_tokens:
+            msgs = shrink_context(msgs, hard_cap_tokens)
+
+        # 念押し
+        while estimate_tokens(msgs) > hard_cap_tokens and any(m["role"] != "system" for m in msgs):
+            msgs = force_shrink(msgs)
+
+        return msgs
+
+def generate_chat(messages: List[Dict], max_tokens: int = 1024, temperature: float = 0.2) -> str:
+        """
+        実際の生成呼び出し。context超過時はフェイルセーフで縮約再送。
+        """
+        try:
+            resp = client.chat.completions.create(
+                model=MODEL,
+                messages=messages,
+                temperature=temperature,
+                max_tokens=max_tokens,
+            )
+            return resp.choices[0].message.content
+        except BadRequestError as e:
+            # context_length_exceeded 対応：最小構成に縮約して再送
+            if "context length" in str(e).lower() or "context_length_exceeded" in str(e).lower():
+                minimal = force_shrink(messages)
+                resp = client.chat.completions.create(
+                    model=MODEL,
+                    messages=minimal,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                )
+                return resp.choices[0].message.content
+            raise
 
 class TokenMeter:
     def __init__(self):
@@ -45,7 +226,7 @@ _token_meter = TokenMeter()
 class OpenAIClient:
     def __init__(self):
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
 
     def _is_rate_limit(self, err: Exception) -> bool:
         try:
