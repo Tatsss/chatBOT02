@@ -180,17 +180,32 @@ def build_messages(
 
 def _extract_usage_from_chat_completion(resp):
     try:
-        u = getattr(resp, "usage", None) or {}
-        inp = u.get("prompt_tokens")
-        out = u.get("completion_tokens")
-        tot = u.get("total_tokens")
+        u = getattr(resp, "usage", None)
+        if not u:
+            return (None, None, None)
+
+        def uget(key):
+            try:
+                v = getattr(u, key)
+                if v is not None:
+                    return v
+            except Exception:
+                pass
+            if isinstance(u, dict):
+                return u.get(key)
+            return None
+
+        inp = uget("prompt_tokens")
+        out = uget("completion_tokens")
+        tot = uget("total_tokens")
 
         if inp is None:
-            inp = u.get("input_tokens")
+            inp = uget("input_tokens")
         if out is None:
-            out = u.get("output_tokens")
+            out = uget("output_tokens")
         if tot is None and (inp is not None or out is not None):
             tot = (inp or 0) + (out or 0)
+
         return (
             int(inp) if inp is not None else None,
             int(out) if out is not None else None,
@@ -198,6 +213,7 @@ def _extract_usage_from_chat_completion(resp):
         )
     except Exception:
         return (None, None, None)
+
 
 def generate_chat(messages: List[Dict], max_tokens: int = 1024, temperature: float = 0.2) -> str:
         """
