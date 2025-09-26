@@ -14,7 +14,8 @@ except Exception:
 
 logger = logging.getLogger(__name__)
 
-MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")  # 通常応答用
+MODEL_SUMMARY = os.getenv("OPENAI_MODEL_SUMMARY", "gpt-4.1-nano")  # 要約専用
 MODEL_CONTEXT = 128_000
 BUDGET_RATIO = 0.80             # 上限の 80%
 OUTPUT_RESERVE = 1024           # 応答用に最低これだけは確保
@@ -63,7 +64,7 @@ def summarize_text_block(text: str, lang: str = "ja") -> str:
         # Chat Completions でも Responses でもOKにする簡易実装
         try:
             resp = client.chat.completions.create(
-                model=MODEL,
+                model=MODEL_SUMMARY,
                 messages=[
                     {"role":"system","content":system},
                     {"role":"user","content": prompt + "\n\n" + text}
@@ -279,7 +280,7 @@ _token_meter = TokenMeter()
 class OpenAIClient:
     def __init__(self):
         self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-        self.model = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.model = os.getenv("OPENAI_MODEL", "gpt-4.1-nano")
 
     def _is_rate_limit(self, err: Exception) -> bool:
         try:

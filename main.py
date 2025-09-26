@@ -128,7 +128,7 @@ async def webhook(body: LineWebhookBody):
             }
             requests.post("https://api.line.me/v2/bot/message/reply", headers=headers, json=payload)
 
-            logger.info("✅ webhook text flow completed (profile+summary+budget)")
+            logger.info("✅ webhook text flow completed")
             return {"status": "success"}
 
     return {"status": "unsupported message type"}
