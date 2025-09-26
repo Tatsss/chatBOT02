@@ -151,7 +151,7 @@ def build_messages(
             msgs.append({"role": "system", "content": ROLE_PROMPT[:4000]})
         if system_prompt:
             msgs.append({"role": "system", "content": system_prompt.strip()[:4000]})
-            
+
 
         if profile_bullets:
             profile_text = "- " + "\n- ".join(profile_bullets[:10])
@@ -181,14 +181,21 @@ def build_messages(
 def _extract_usage_from_chat_completion(resp):
     try:
         u = getattr(resp, "usage", None) or {}
-        inp = getattr(u, "input_tokens", None) or u.get("input_tokens")
-        out = getattr(u, "output_tokens", None) or u.get("output_tokens")
-        tot = getattr(u, "total_tokens", None) or u.get("total_tokens")
+        inp = u.get("prompt_tokens")
+        out = u.get("completion_tokens")
+        tot = u.get("total_tokens")
+
+        if inp is None:
+            inp = u.get("input_tokens")
+        if out is None:
+            out = u.get("output_tokens")
         if tot is None and (inp is not None or out is not None):
             tot = (inp or 0) + (out or 0)
-        return (int(inp) if inp is not None else None,
-                int(out) if out is not None else None,
-                int(tot) if tot is not None else None)
+        return (
+            int(inp) if inp is not None else None,
+            int(out) if out is not None else None,
+            int(tot) if tot is not None else None,
+        )
     except Exception:
         return (None, None, None)
 
