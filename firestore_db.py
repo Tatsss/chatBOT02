@@ -4,6 +4,7 @@ import firebase_admin
 from datetime import datetime
 from typing import List, Tuple, Optional
 from firebase_admin import credentials, firestore
+from google.cloud.firestore_v1.base_query import FieldFilter
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +27,8 @@ class FirestoreDB:
 
     def get_last_response_id(self, user_id):
         docs = (
-            self.collection.where("user_id", "==", user_id)
+            self.collection
+            .where(filter=FieldFilter("user_id", "==", user_id))
             .order_by("timestamp", direction=firestore.Query.DESCENDING)
             .limit(1)
             .stream()
@@ -55,10 +57,13 @@ class FirestoreDB:
         log_conversation の構造（1 doc に user/assistant ペア）に合わせて
         直近 N 件から role/content の配列を組み立てる。
         """
+
         snaps = (
-            self.collection.where("user_id", "==", user_id)
+            self.collection
+            .where(filter=FieldFilter("user_id", "==", user_id))
             .order_by("timestamp", direction=firestore.Query.DESCENDING)
-            .limit(limit).stream()
+            .limit(limit)
+            .stream()
         )
         pairs = []
         for s in snaps:
